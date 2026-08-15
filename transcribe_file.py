@@ -66,6 +66,49 @@ SEG_MODEL = DIAR_DIR / "sherpa-onnx-pyannote-segmentation-3-0" / "model.onnx"
 EMB_MODEL = DIAR_DIR / "3dspeaker_campplus_zh_en.onnx"
 
 
+def pick_device(torch) -> tuple[str, object]:
+    """(device, dtype) — CUDA, then Apple MPS, then CPU.
+
+    CUDA MUST be tested first. An earlier version checked only MPS and fell
+    through to CPU everywhere else, so every Colab and every Linux GPU box ran
+    on CPU while the notebook cheerfully printed the name of the unused T4.
+    A 7.6-minute file went from about a minute to not finishing, with no output
+    saying why.
+
+    fp16 on GPU, fp32 on CPU: half precision on CPU is emulated and slower.
+    """
+    if torch.cuda.is_available():
+        return "cuda", torch.float16
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return "mps", torch.float16
+    return "cpu", torch.float32
+
+
+def quiet_transformers() -> None:
+    """Silence benign, unavoidable transformers chatter.
+
+    Every one of these fires on a correct run: the logits-processor notices are
+    caused by our own generate kwargs, return_segments is set by transformers
+    itself, and the BPE cleanup notice describes a default we already want.
+    Printed once per call they bury the actual progress output, and a user
+    watching a wall of warnings cannot tell a working run from a broken one.
+    """
+    import logging
+    import warnings
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
+    warnings.filterwarnings("ignore", message=".*clean_up_tokenization_spaces.*")
+    # onnxruntime announces that CUDAExecutionProvider is unavailable. The
+    # punctuation and diarization models are meant to run on CPU, so this is
+    # working as intended — but on a GPU box it reads like the GPU was missed.
+    warnings.filterwarnings("ignore", message=".*CUDAExecutionProvider.*")
+    try:
+        from transformers.utils import logging as tlog
+        tlog.set_verbosity_error()
+    except Exception:
+        pass
+
+
 # --- audio ---------------------------------------------------------------
 def load_audio(path: str, gain: bool = True) -> np.ndarray:
     """Decode anything ffmpeg understands to 16 kHz mono float32."""
@@ -383,9 +426,16 @@ def main() -> None:
                     help="do not skip silent regions (slower, hallucinates)")
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--target", type=float, default=25.0)
-    ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--verbose", action="store_true",
+                    help="per-block timings and word counts")
+    ap.add_argument("--quiet", action="store_true",
+                    help="no progress line")
+    ap.add_argument("--loud", action="store_true",
+                    help="keep transformers' warnings")
     args = ap.parse_args()
 
+    if not args.loud:
+        quiet_transformers()
     import torch
     from transformers import (WhisperForConditionalGeneration,
                               WhisperProcessor)
@@ -394,10 +444,16 @@ def main() -> None:
     t_all = time.monotonic()
     pcm = load_audio(args.input)
     dur = len(pcm) / RATE
-    print(f"audio: {dur/60:.1f} min", flush=True)
 
-    dev = "mps" if torch.backends.mps.is_available() else "cpu"
-    dt = torch.float16 if dev == "mps" else torch.float32
+    dev, dt = pick_device(torch)
+    where = (torch.cuda.get_device_name(0) if dev == "cuda"
+             else "Apple GPU" if dev == "mps" else "CPU (no GPU found)")
+    # Say where this is running BEFORE the slow part. A silent CPU fallback is
+    # indistinguishable from a hang, which is exactly how this failed on Colab.
+    print(f"audio: {dur/60:.1f} min   device: {dev} — {where}", flush=True)
+    if dev == "cpu":
+        print("  WARNING: CPU is roughly 20x slower than a GPU here; expect "
+              f"~{dur/60*3:.0f}-{dur/60*4:.0f} min for this file.", flush=True)
     proc = WhisperProcessor.from_pretrained(args.model, language="lithuanian",
                                             task="transcribe")
     mdl = WhisperForConditionalGeneration.from_pretrained(
@@ -406,7 +462,7 @@ def main() -> None:
     t0 = time.monotonic()
     words = transcribe_words(pcm, mdl, proc, device=dev, target=args.target,
                              gate_silence=not args.no_gate,
-                             verbose=args.verbose)
+                             verbose=args.verbose, progress=not args.quiet)
     print(f"decode: {len(words)} words in {time.monotonic()-t0:.0f}s "
           f"(RTF {(time.monotonic()-t0)/dur:.2f})", flush=True)
     if not words:

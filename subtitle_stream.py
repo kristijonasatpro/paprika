@@ -97,13 +97,16 @@ class SubtitleStream:
         from transformers import (WhisperForConditionalGeneration,
                                   WhisperProcessor)
         self.torch = torch
-        self.device = device or ("mps" if torch.backends.mps.is_available()
-                                 else "cpu")
+        # CUDA first, then Apple MPS, then CPU. Checking only MPS silently sent
+        # every Linux and Colab GPU user to the CPU path — see
+        # transcribe_file.pick_device.
         # fp16 measured 25% faster than fp32 on MPS with IDENTICAL word counts
         # across all eight window sizes, so the speed is not bought with
         # accuracy. CPU keeps fp32: fp16 on CPU is emulated and slower.
-        self.dtype = dtype or (torch.float16 if self.device == "mps"
-                               else torch.float32)
+        from transcribe_file import pick_device
+        _dev, _dt = pick_device(torch)
+        self.device = device or _dev
+        self.dtype = dtype or _dt
         self.language = language
         self.proc = WhisperProcessor.from_pretrained(
             model_dir, language=language, task="transcribe")

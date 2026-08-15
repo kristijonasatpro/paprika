@@ -143,7 +143,7 @@ def transcribe_words(pcm: np.ndarray, model, processor, device: str = "cpu",
                      language: str = "lithuanian", sr: int = RATE,
                      target: float = 25.0, min_len: float = 12.0,
                      max_len: float = 29.0, gate_silence: bool = True,
-                     verbose: bool = False) -> list[dict]:
+                     verbose: bool = False, progress: bool = False) -> list[dict]:
     """Same pause-aligned scheme as transcribe(), but returns WORDS with
     absolute timestamps so punctuation and diarization have something to
     attach to.
@@ -155,17 +155,31 @@ def transcribe_words(pcm: np.ndarray, model, processor, device: str = "cpu",
     block, so a token's timestamp is simply its offset from the block start.
     Cuts still land in pauses, so nothing is split across a boundary.
     """
+    import sys
+    import time as _time
+
     import torch
     regions = (speech_regions(pcm, sr) if gate_silence
                else [(0, len(pcm))])
+    # Enumerate every block up front so progress can show a real denominator
+    # and an ETA. Without this the run printed nothing between "audio: 7.6 min"
+    # and completion, so a slow run was indistinguishable from a hung one —
+    # which is how the first Colab attempt was killed by hand.
+    blocks = [(r0 + a, r0 + b) for r0, r1 in regions
+              for a, b in find_cut_points(pcm[r0:r1], sr, target=target,
+                                          min_len=min_len, max_len=max_len)]
+    blocks = [(x, y) for x, y in blocks if y - x >= int(0.2 * sr)]
+    speech_s = sum(y - x for x, y in blocks) / sr
+    if progress:
+        skipped = len(pcm) / sr - speech_s
+        print(f"  {len(blocks)} blocks, {speech_s/60:.1f} min of speech"
+              + (f" ({skipped/60:.1f} min silence skipped)" if skipped > 5 else ""),
+              flush=True)
+    t_start = _time.monotonic()
     words: list[dict] = []
-    for r0, r1 in regions:
-        seg_pcm = pcm[r0:r1]
-        for a, b in find_cut_points(seg_pcm, sr, target=target,
-                                    min_len=min_len, max_len=max_len):
-            clip, t0 = seg_pcm[a:b], (r0 + a) / sr
-            if len(clip) < int(0.2 * sr):
-                continue
+    for i, (x, y) in enumerate(blocks):
+            clip, t0 = pcm[x:y], x / sr
+            a, b = x, y
             feats = processor(clip, sampling_rate=sr, return_tensors="pt",
                               return_attention_mask=True)
             with torch.no_grad():
@@ -183,10 +197,20 @@ def transcribe_words(pcm: np.ndarray, model, processor, device: str = "cpu",
             tts = out.get("token_timestamps")
             tts = tts[0].tolist() if tts is not None else None
             got = words_from_tokens(toks, tts, processor, t0, (b - a) / sr)
-            _widen(got, limit=(r0 + b) / sr)
+            _widen(got, limit=b / sr)
             words.extend(got)
             if verbose:
                 print(f"  {t0:7.1f}s +{(b-a)/sr:5.1f}s  {len(got):4}w", flush=True)
+            elif progress:
+                el = _time.monotonic() - t_start
+                eta = el / (i + 1) * (len(blocks) - i - 1)
+                sys.stdout.write(
+                    f"\r  block {i+1}/{len(blocks)}  {len(words)} words  "
+                    f"{el:.0f}s elapsed, ~{eta:.0f}s left   ")
+                sys.stdout.flush()
+    if progress and not verbose and blocks:
+        sys.stdout.write("\r" + " " * 70 + "\r")
+        sys.stdout.flush()
     return words
 
 
