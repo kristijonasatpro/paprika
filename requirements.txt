@@ -1,0 +1,19 @@
+# Core ASR
+torch>=2.4
+transformers>=4.44
+soundfile>=0.12
+numpy>=1.24
+librosa>=0.10          # only used to resample non-16 kHz wavs
+
+# Punctuation and truecasing (ONNX, runs on CPU)
+punctuators>=0.0.5
+onnxruntime>=1.17
+
+# Speaker diarization (ONNX, runs on CPU). Optional: without it
+# transcribe_file.py still works, it just omits speaker labels.
+sherpa-onnx>=1.10
+
+# ffmpeg is required but is NOT a pip package:
+#   macOS         brew install ffmpeg
+#   Debian/Ubuntu apt install ffmpeg
+#   Windows       winget install Gyan.FFmpeg
