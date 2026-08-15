@@ -1,6 +1,6 @@
-# paprika-lt-asr
+# paprika 🌶️ — Lithuanian speech-to-text
 
-Lithuanian speech-to-text that runs on your own machine. Two pipelines, both
+Runs entirely on your own machine. Two pipelines, both
 producing punctuation:
 
 - **`subtitle_stream.py`** — live subtitles from a microphone, stable enough to
@@ -17,8 +17,8 @@ corpus.
 ## Install
 
 ```bash
-git clone https://github.com/kristijonasatpro/paprika-lt-asr
-cd paprika-lt-asr
+git clone https://github.com/kristijonasatpro/paprika
+cd paprika
 pip install -r requirements.txt        # ffmpeg must also be on PATH
 ```
 
