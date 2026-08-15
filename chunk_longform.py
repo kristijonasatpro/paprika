@@ -173,10 +173,30 @@ def transcribe_words(pcm: np.ndarray, model, processor, device: str = "cpu",
     if progress:
         skipped = len(pcm) / sr - speech_s
         print(f"  {len(blocks)} blocks, {speech_s/60:.1f} min of speech"
-              + (f" ({skipped/60:.1f} min silence skipped)" if skipped > 5 else ""),
+              + (f" ({skipped/60:.1f} min skipped as silence)" if skipped > 5 else ""),
               flush=True)
+        # Name the skipped ranges, not just the total. "6.3 min skipped" gives
+        # no way to tell correct silence-dropping from a gate that ate real
+        # speech — and the transcript reads perfectly either way, so nothing
+        # else will reveal it. With ranges printed, a user who knows their
+        # recording can spot a wrong one immediately.
+        gaps, prev = [], 0
+        for x, y in blocks:
+            if x - prev > 10 * sr:
+                gaps.append((prev / sr, x / sr))
+            prev = y
+        if (len(pcm) - prev) > 10 * sr:
+            gaps.append((prev / sr, len(pcm) / sr))
+        for g0, g1 in gaps[:6]:
+            print(f"    skipped {int(g0)//60:02d}:{int(g0)%60:02d}"
+                  f"–{int(g1)//60:02d}:{int(g1)%60:02d}  ({g1-g0:.0f}s)",
+                  flush=True)
+        if gaps:
+            print("    (if speech is in there, rerun with --no-gate)",
+                  flush=True)
     t_start = _time.monotonic()
     words: list[dict] = []
+    empty: list[tuple[int, int]] = []
     for i, (x, y) in enumerate(blocks):
             clip, t0 = pcm[x:y], x / sr
             a, b = x, y
@@ -198,6 +218,8 @@ def transcribe_words(pcm: np.ndarray, model, processor, device: str = "cpu",
             tts = tts[0].tolist() if tts is not None else None
             got = words_from_tokens(toks, tts, processor, t0, (b - a) / sr)
             _widen(got, limit=b / sr)
+            if not got:
+                empty.append((x, y))
             words.extend(got)
             if verbose:
                 print(f"  {t0:7.1f}s +{(b-a)/sr:5.1f}s  {len(got):4}w", flush=True)
@@ -211,6 +233,18 @@ def transcribe_words(pcm: np.ndarray, model, processor, device: str = "cpu",
     if progress and not verbose and blocks:
         sys.stdout.write("\r" + " " * 70 + "\r")
         sys.stdout.flush()
+    if progress and empty:
+        # A block the model returned nothing for is the OTHER way audio goes
+        # missing silently: the gate kept it, so it never appears as skipped,
+        # and the transcript simply has no words there. Usually it really is
+        # non-speech (applause, music, room noise), but if the user knows
+        # somebody was talking, this is where to look.
+        tot = sum(y - x for x, y in empty) / sr
+        print(f"  {len(empty)} block(s), {tot:.0f}s, produced no words:",
+              flush=True)
+        for x, y in empty[:6]:
+            print(f"    {int(x/sr)//60:02d}:{int(x/sr)%60:02d}"
+                  f"–{int(y/sr)//60:02d}:{int(y/sr)%60:02d}", flush=True)
     return words
 
 

@@ -496,8 +496,32 @@ def main() -> None:
         if moved:
             print(f"  smoothed {moved} words out of one-off speaker runs",
                   flush=True)
+        # Automatic speaker counting is the weakest link and fails in BOTH
+        # directions depending on the room: on one press conference it found
+        # 9-11 speakers for two people, on a meeting recording it merged a
+        # floor question into the chair's answer. Segmentation proposes the
+        # boundaries correctly (longest segment 19.8 s on comparable audio);
+        # it is clustering that cannot always tell two similar voices on one
+        # distant microphone apart. Nothing here can fix that silently, so the
+        # least it can do is say when the result looks implausible.
+        if args.speakers < 0 and n_spk == 1 and dur > 60:
+            print("  NOTE: only one speaker found in "
+                  f"{dur/60:.0f} min. If more than one person speaks, rerun "
+                  "with --speakers N — a known count beats the threshold.",
+                  flush=True)
 
     turns = build_turns(words)
+    # A turn far longer than anyone speaks uninterrupted usually means a
+    # speaker change was missed, not that somebody talked for a minute
+    # straight. Worth surfacing: the transcript still READS fine, so there is
+    # nothing in the output itself to suggest the labels are wrong.
+    if not args.no_diar and turns:
+        longest = max(t["end"] - t["start"] for t in turns)
+        if longest > 60:
+            print(f"  NOTE: longest turn is {longest:.0f}s. If a question or "
+                  "interjection is buried inside it, the speaker change was "
+                  "missed — rerun with --speakers N, or --diar-threshold 0.4 "
+                  "to split more eagerly.", flush=True)
     out_dir = pathlib.Path(args.out_dir) if args.out_dir else pathlib.Path(args.input).parent
     base = out_dir / pathlib.Path(args.input).stem
     write_outputs(base, turns, words)
