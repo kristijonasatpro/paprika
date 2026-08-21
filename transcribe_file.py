@@ -470,6 +470,7 @@ def main() -> None:
 
     if not args.no_punct:
         from punct_restore import Punctuator
+        print("punctuating …", flush=True)
         t0 = time.monotonic()
         raw = " ".join(w["w"] for w in words)
         txt, st = Punctuator().restore(raw)
@@ -485,6 +486,7 @@ def main() -> None:
 
     turns_d: list[tuple[float, float, int]] = []
     if not args.no_diar:
+        print("diarizing … (first run downloads two small models)", flush=True)
         t0 = time.monotonic()
         turns_d = diarize(pcm, args.speakers, args.diar_threshold)
         n_spk = len({s for _, _, s in turns_d})

@@ -226,11 +226,13 @@ def transcribe_words(pcm: np.ndarray, model, processor, device: str = "cpu",
             elif progress:
                 el = _time.monotonic() - t_start
                 eta = el / (i + 1) * (len(blocks) - i - 1)
-                sys.stdout.write(
-                    f"\r  block {i+1}/{len(blocks)}  {len(words)} words  "
-                    f"{el:.0f}s elapsed, ~{eta:.0f}s left   ")
-                sys.stdout.flush()
-    if progress and not verbose and blocks:
+                text, show = _progress_line(i, len(blocks), len(words), el, eta,
+                                            _interactive())
+                if show:
+                    sys.stdout.write(text)
+                    sys.stdout.flush()
+    # only a TTY needs the in-place line wiped; a notebook printed real lines
+    if progress and not verbose and blocks and _interactive():
         sys.stdout.write("\r" + " " * 70 + "\r")
         sys.stdout.flush()
     if progress and empty:
@@ -246,6 +248,31 @@ def transcribe_words(pcm: np.ndarray, model, processor, device: str = "cpu",
             print(f"    {int(x/sr)//60:02d}:{int(x/sr)%60:02d}"
                   f"–{int(y/sr)//60:02d}:{int(y/sr)%60:02d}", flush=True)
     return words
+
+
+def _interactive():
+    """True only for a real terminal. Notebooks and pipes get whole lines."""
+    try:
+        return sys.stdout.isatty()
+    except Exception:
+        return False
+
+
+# Progress rendering. A terminal gets an in-place \r line that ticks 1..N.
+# A notebook does NOT: Colab and Jupyter buffer carriage returns, so a \r line
+# is drawn once and then never appears to move, which reads as a hung job. That
+# cost a real user a cancelled run on a healthy 7-minute file (reported
+# 2026-08-21). When stdout is not a TTY, emit whole lines instead, thinned out
+# so a long recording does not scroll away the rest of the output.
+def _progress_line(i, total, n_words, elapsed, eta, interactive):
+    body = (f"  block {i+1}/{total}  {n_words} words  "
+            f"{elapsed:.0f}s elapsed, ~{eta:.0f}s left")
+    if interactive:
+        return "\r" + body + "   ", True
+    # first, last, and roughly every 10% in between
+    step = max(1, total // 10)
+    show = (i == 0 or i + 1 == total or (i + 1) % step == 0)
+    return (body + "\n", True) if show else ("", False)
 
 
 def _widen(words: list[dict], limit: float, min_dur: float = 0.08) -> None:
