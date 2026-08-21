@@ -110,6 +110,15 @@ def quiet_transformers() -> None:
 
 
 # --- audio ---------------------------------------------------------------
+def _available_ram_gb():
+    """Best-effort free RAM. Returns None where it cannot be determined."""
+    try:
+        import os as _os
+        return (_os.sysconf("SC_AVPHYS_PAGES") * _os.sysconf("SC_PAGE_SIZE")) / 1e9
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
 def load_audio(path: str, gain: bool = True) -> np.ndarray:
     """Decode anything ffmpeg understands to 16 kHz mono float32."""
     import soundfile as sf
@@ -417,6 +426,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("input")
     ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--no-word-ts", action="store_true",
+                    help="skip per-word timestamps. Whisper's word alignment "
+                         "materialises the full cross-attention stack and costs "
+                         "~6.4 GB of RAM per block regardless of block length, "
+                         "which is what kills a free Colab runtime. Without it "
+                         "word times are spread evenly inside each block: "
+                         "coarser, but the transcript and speaker turns survive")
     ap.add_argument("--speakers", type=int, default=-1,
                     help="known speaker count; -1 = decide by threshold")
     ap.add_argument("--diar-threshold", type=float, default=0.55)
@@ -451,6 +467,13 @@ def main() -> None:
     # Say where this is running BEFORE the slow part. A silent CPU fallback is
     # indistinguishable from a hang, which is exactly how this failed on Colab.
     print(f"audio: {dur/60:.1f} min   device: {dev} — {where}", flush=True)
+    if not args.no_word_ts:
+        avail = _available_ram_gb()
+        if avail is not None and avail < 13.0:
+            print(f"  WARNING: {avail:.1f} GB RAM free. Per-word timestamps need "
+                  f"about 10 GB peak and WILL be killed here (a free Colab "
+                  f"runtime dies around block 4). Rerun with --no-word-ts.",
+                  flush=True)
     if dev == "cpu":
         print("  WARNING: CPU is roughly 20x slower than a GPU here; expect "
               f"~{dur/60*3:.0f}-{dur/60*4:.0f} min for this file.", flush=True)
@@ -460,7 +483,8 @@ def main() -> None:
         args.model, dtype=dt).to(dev).eval()
 
     t0 = time.monotonic()
-    words = transcribe_words(pcm, mdl, proc, device=dev, target=args.target,
+    words = transcribe_words(pcm, mdl, proc, device=dev, word_ts=not args.no_word_ts,
+                             target=args.target,
                              gate_silence=not args.no_gate,
                              verbose=args.verbose, progress=not args.quiet)
     print(f"decode: {len(words)} words in {time.monotonic()-t0:.0f}s "

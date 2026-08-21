@@ -143,7 +143,8 @@ def transcribe_words(pcm: np.ndarray, model, processor, device: str = "cpu",
                      language: str = "lithuanian", sr: int = RATE,
                      target: float = 25.0, min_len: float = 12.0,
                      max_len: float = 29.0, gate_silence: bool = True,
-                     verbose: bool = False, progress: bool = False) -> list[dict]:
+                     verbose: bool = False, progress: bool = False,
+                     word_ts: bool = True) -> list[dict]:
     """Same pause-aligned scheme as transcribe(), but returns WORDS with
     absolute timestamps so punctuation and diarization have something to
     attach to.
@@ -207,7 +208,7 @@ def transcribe_words(pcm: np.ndarray, model, processor, device: str = "cpu",
                     feats.input_features.to(device, model.dtype),
                     attention_mask=feats.attention_mask.to(device),
                     language=language, task="transcribe",
-                    return_timestamps=True, return_token_timestamps=True,
+                    return_timestamps=True, return_token_timestamps=word_ts,
                     return_dict_in_generate=True,
                     condition_on_prev_tokens=False,
                     temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),

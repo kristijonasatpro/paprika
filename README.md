@@ -14,6 +14,18 @@ Built around [`paprika-whisper-lt-v3`](https://huggingface.co/kristijonas/paprik
 a `whisper-large-v3-turbo` fine-tune on ~3,281 h of the Lithuanian LIEPA-3
 corpus.
 
+## Memory
+
+Per-word timestamps are the expensive part: Whisper's word alignment builds the
+full cross-attention stack and peaks around 10 GB of RAM per block, and that
+does not shrink if you use shorter blocks. On a 12.7 GB machine, such as a free
+Colab runtime, the run is killed part-way through and you see only `^C`.
+
+Pass `--no-word-ts` there. Word times are spread evenly inside each block, so
+the transcript, punctuation, speaker turns and subtitle files are unchanged and
+only per-word timing gets coarser. Peak drops to under 4 GB. With 16 GB or more,
+leave it off and get exact word timings.
+
 ## Install
 
 ```bash
