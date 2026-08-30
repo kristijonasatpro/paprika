@@ -17,3 +17,9 @@ sherpa-onnx>=1.10
 #   macOS         brew install ffmpeg
 #   Debian/Ubuntu apt install ffmpeg
 #   Windows       winget install Gyan.FFmpeg
+
+# --- transcribe_kmynas.py only (the Parakeet TDT pipeline) -------------------
+# Not needed for transcribe_file.py / subtitle_stream.py. NeMo is a large
+# install; skip these if you only use the Whisper-based paprika path.
+nemo_toolkit[asr]>=2.0
+omegaconf>=2.3

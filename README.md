@@ -7,6 +7,9 @@ producing punctuation:
   put on a screen.
 - **`transcribe_file.py`** — long recordings to a punctuated, speaker-labelled
   transcript plus `.srt` / `.vtt` / `.json`.
+- **`transcribe_kmynas.py`** — the same file transcription, but driven by the
+  smaller and much faster [kmynas](#kmynas--the-faster-lighter-alternative)
+  checkpoint.
 
 Nothing leaves the machine. No API key, no upload.
 
@@ -158,3 +161,42 @@ ONNX-only and always runs on CPU.
 
 Code Apache-2.0. Model weights CC BY 4.0, inheriting the LIEPA-3 corpus
 (VU / raštija.lt) and `svogunas/whisper-large-v3-turbo-lt` attribution chain.
+
+## kmynas — the faster, lighter alternative
+
+`transcribe_kmynas.py` does the same job as `transcribe_file.py` with a
+different model, and the trade is real in both directions.
+
+| | paprika (`transcribe_file.py`) | kmynas (`transcribe_kmynas.py`) |
+|---|---|---|
+| model | Whisper large-v3-turbo fine-tune, ~800M | Parakeet TDT fine-tune, 600M |
+| punctuation | separate ONNX tagger after decoding | from the model itself |
+| word timestamps | cross-attention alignment, ~6.4 GB per block | near-free |
+| speed | RTF ~0.30 | RTF ~0.04 (about 7x faster) |
+| clean prepared speech | **better** | weaker |
+
+Everything after decoding — diarization, speaker smoothing, turns, cues and the
+writers — is shared code, imported from `transcribe_file`, so the two produce
+identically laid-out transcripts and cannot drift apart.
+
+```bash
+python transcribe_kmynas.py recording.m4a --speakers 2 \
+       --model /path/to/kmynas-v3-final.nemo
+```
+
+**The kmynas checkpoint is currently a private Hugging Face repo**, so unlike
+paprika it will not download itself unless you are authenticated for it. Pass
+`--model` (or set `$KMYNAS_MODEL`) to a local `.nemo` file.
+
+### Which one to use
+
+Read both on your own audio; they fail differently and the difference is not
+captured by a single number. On a clean, prepared recording (a library book
+launch) paprika read noticeably better: kmynas mangled proper nouns, left
+duplicated words at block seams, and emitted stray letter clusters where the
+audience applauded. kmynas is the one to reach for when you want speed, a
+smaller footprint, and punctuation without a second model — and it holds up
+better on spontaneous speech than the benchmarks suggest.
+
+Install `nemo_toolkit[asr]` (see `requirements.txt`) only if you want this path;
+it is a large dependency and the paprika pipeline does not need it.
