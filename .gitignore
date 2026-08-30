@@ -7,3 +7,21 @@ diar-models/
 *.mov
 .venv/
 .DS_Store
+
+# --- model checkpoints (GB-scale, and some are private) ---
+*.nemo
+
+# --- private data: recordings, harvested corpus, eval sets, transcripts ---
+audio/
+corpus/
+harvest/
+evalset/
+transcripts/
+.venv-nemo/
+
+# --- internal evaluation notes: contain real names and quoted private speech ---
+KMYNAS_FINDINGS.md
+KMYNAS_V2_EVAL.md
+GEMINI_VS_SCRIBE_VS_KMYNAS.md
+CORPUS_NOTES.md
+sudi_post_draft.md

@@ -7,27 +7,14 @@ producing punctuation:
   put on a screen.
 - **`transcribe_file.py`** — long recordings to a punctuated, speaker-labelled
   transcript plus `.srt` / `.vtt` / `.json`.
-- **`transcribe_kmynas.py`** — the same file transcription, but driven by the
-  smaller and much faster [kmynas](#kmynas--the-faster-lighter-alternative)
-  checkpoint.
+- **`transcribe_kmynas.py`** — the same outputs from a Parakeet-TDT model
+  instead of Whisper. Roughly 30× faster, and it emits punctuation itself.
 
 Nothing leaves the machine. No API key, no upload.
 
 Built around [`paprika-whisper-lt-v3`](https://huggingface.co/kristijonas/paprika-whisper-lt-v3),
 a `whisper-large-v3-turbo` fine-tune on ~3,281 h of the Lithuanian LIEPA-3
 corpus.
-
-## Memory
-
-Per-word timestamps are the expensive part: Whisper's word alignment builds the
-full cross-attention stack and peaks around 10 GB of RAM per block, and that
-does not shrink if you use shorter blocks. On a 12.7 GB machine, such as a free
-Colab runtime, the run is killed part-way through and you see only `^C`.
-
-Pass `--no-word-ts` there. Word times are spread evenly inside each block, so
-the transcript, punctuation, speaker turns and subtitle files are unchanged and
-only per-word timing gets coarser. Peak drops to under 4 GB. With 16 GB or more,
-leave it off and get exact word timings.
 
 ## Install
 
@@ -63,6 +50,122 @@ for raw output, `--model` for a different checkpoint.
 
 Roughly 17× faster than real time on an M4 Mac mini: a 10-minute recording
 takes about a minute, most of it diarization.
+
+## The Parakeet pipeline (`transcribe_kmynas.py`)
+
+`transcribe_kmynas.py` does the same job as `transcribe_file.py` with a
+different model, and the trade is real in both directions.
+
+| | paprika (`transcribe_file.py`) | kmynas (`transcribe_kmynas.py`) |
+|---|---|---|
+| model | Whisper large-v3-turbo fine-tune, ~800M | Parakeet TDT fine-tune, 600M |
+| punctuation | separate ONNX tagger after decoding | from the model itself |
+| word timestamps | cross-attention alignment, ~6.4 GB per block | near-free |
+| speed | RTF ~0.30 | RTF ~0.03 (about 10x faster) |
+| clean prepared speech | **better** | weaker |
+
+Everything after decoding — diarization, speaker smoothing, turns, cues and the
+writers — is shared code, imported from `transcribe_file`, so the two produce
+identically laid-out transcripts and cannot drift apart.
+
+**The kmynas checkpoint may be a private Hugging Face repo**, so unlike paprika
+it will not download itself unless you are authenticated. Pass `--model` (or set
+`$KMYNAS_MODEL`) to a local `.nemo` file.
+
+### Which one to use
+
+Read both on your own audio; they fail differently and the difference is not
+captured by a single number. On clean, prepared speech paprika still reads
+better — kmynas mangles rare proper nouns. Two of its earlier weaknesses are
+handled now: duplicated words at block seams, and stray letter clusters where
+an audience applauds (see the next section for how). Reach for kmynas when you
+want speed, a smaller footprint, and punctuation without a second model; it
+holds up better on spontaneous speech than the benchmarks suggest.
+
+Install `nemo_toolkit[asr]` only if you want this path; it is a large
+dependency and the paprika pipeline does not need it.
+
+It needs NeMo, which pins versions that conflict with the Whisper stack, so keep
+it in its own environment:
+
+```bash
+python -m venv .venv-nemo
+.venv-nemo/bin/pip install nemo_toolkit[asr] silero-vad soundfile
+.venv-nemo/bin/python transcribe_kmynas.py recording.m4a \
+    --model your-model.nemo --speakers 2 --lexicon lexicon.tsv
+```
+
+### Why it is not just "cut into blocks and decode"
+
+Long-form transducer decoding fails in specific, reproducible ways, and most of
+this file is the handling for them. Each was measured, and several plausible
+fixes were tried and rejected — those are documented in the code so they are not
+retried blind.
+
+**Blocks are placed by voice activity, not by a timer** (`--vad-target`,
+default 60 s; `--no-vad` to disable). Every block starts at a speech onset and
+ends at a speech offset, and the non-speech between two blocks is dropped rather
+than split. This matters because the model normalises features *per utterance*:
+silence inside a block shifts the mel statistics of every speech frame in it, so
+a cut through the middle of a pause damages both neighbours. Cutting at a
+pause's edges damages neither. An energy threshold cannot find those edges —
+room tone and quiet speech overlap in RMS on real recordings — so Silero VAD
+does it.
+
+**Overlapping blocks are merged by word midpoint plus an n-gram seam pass**
+(`--overlap`, default 1.3 s; ignored in VAD mode, where boundaries already sit
+in silence). A word straddling a cut is decoded whole by both neighbours and
+kept once. Without this, cuts land mid-word and the orphaned tail is capitalised
+as a new sentence — 31 of 60 seams did that on one 35-minute recording.
+
+**Hallucinated non-words are filtered** (`--min-confidence`, default 0.98, `0`
+disables). On non-speech — breath, laughter, applause — the model has no way to
+emit nothing, so it emits short consonant clusters instead. A word is dropped
+only when it is *both* low-confidence *and* orthographically impossible in
+Lithuanian (contains no vowel), with acronyms and `m`/`h`/`n` fillers
+whitelisted. Either test alone is too blunt; together they removed 63 such
+tokens across five recordings without touching a real word.
+
+**Borrowed words are spelled one way** (`--lexicon lexicon.tsv`, off by
+default). The model renders the same loanword several ways in one recording.
+The table collapses the variants onto whichever form that model already produces
+most often, so it removes inconsistency without imposing an orthography. Edit it
+for your own domain.
+
+### Flags worth knowing
+
+| flag | default | what it does |
+|---|---|---|
+| `--speakers N` | `-1` | known speaker count; far better than letting the threshold guess |
+| `--vad-target` | `60` | target block length in seconds |
+| `--no-vad` | off | fall back to the older fixed-target chunker |
+| `--min-confidence` | `0.98` | hallucination filter threshold; `0` disables |
+| `--overlap` | `1.3` | block overlap in seconds (non-VAD mode) |
+| `--lexicon` | none | loanword spelling table |
+| `--dtype` | `fp16` | use `fp32` on Apple Silicon if output looks wrong |
+| `--block-secs` | `35` | max block length in non-VAD mode |
+| `--boost-file` | none | domain term list — measured ineffective, see the docstring |
+
+### Block length and memory
+
+Block length is the memory knob, and attention cost is quadratic in it. On a
+16 GB machine 60 s blocks are comfortable; 120 s works but pushes several GB
+into swap for no measured accuracy gain. Single-pass decoding of a whole file
+(no blocks at all) is fine up to about 5 minutes and gets the process OOM-killed
+well before 10. Note that on Apple Silicon this memory does **not** show up in
+RSS — watch `sysctl -n vm.swapusage` instead.
+
+## Memory (paprika word timestamps)
+
+Per-word timestamps are the expensive part: Whisper's word alignment builds the
+full cross-attention stack and peaks around 10 GB of RAM per block, and that
+does not shrink if you use shorter blocks. On a 12.7 GB machine, such as a free
+Colab runtime, the run is killed part-way through and you see only `^C`.
+
+Pass `--no-word-ts` there. Word times are spread evenly inside each block, so
+the transcript, punctuation, speaker turns and subtitle files are unchanged and
+only per-word timing gets coarser. Peak drops to under 4 GB. With 16 GB or more,
+leave it off and get exact word timings.
 
 ## Live subtitles
 
@@ -161,42 +264,3 @@ ONNX-only and always runs on CPU.
 
 Code Apache-2.0. Model weights CC BY 4.0, inheriting the LIEPA-3 corpus
 (VU / raštija.lt) and `svogunas/whisper-large-v3-turbo-lt` attribution chain.
-
-## kmynas — the faster, lighter alternative
-
-`transcribe_kmynas.py` does the same job as `transcribe_file.py` with a
-different model, and the trade is real in both directions.
-
-| | paprika (`transcribe_file.py`) | kmynas (`transcribe_kmynas.py`) |
-|---|---|---|
-| model | Whisper large-v3-turbo fine-tune, ~800M | Parakeet TDT fine-tune, 600M |
-| punctuation | separate ONNX tagger after decoding | from the model itself |
-| word timestamps | cross-attention alignment, ~6.4 GB per block | near-free |
-| speed | RTF ~0.30 | RTF ~0.04 (about 7x faster) |
-| clean prepared speech | **better** | weaker |
-
-Everything after decoding — diarization, speaker smoothing, turns, cues and the
-writers — is shared code, imported from `transcribe_file`, so the two produce
-identically laid-out transcripts and cannot drift apart.
-
-```bash
-python transcribe_kmynas.py recording.m4a --speakers 2 \
-       --model /path/to/kmynas-v3-final.nemo
-```
-
-**The kmynas checkpoint is currently a private Hugging Face repo**, so unlike
-paprika it will not download itself unless you are authenticated for it. Pass
-`--model` (or set `$KMYNAS_MODEL`) to a local `.nemo` file.
-
-### Which one to use
-
-Read both on your own audio; they fail differently and the difference is not
-captured by a single number. On a clean, prepared recording (a library book
-launch) paprika read noticeably better: kmynas mangled proper nouns, left
-duplicated words at block seams, and emitted stray letter clusters where the
-audience applauded. kmynas is the one to reach for when you want speed, a
-smaller footprint, and punctuation without a second model — and it holds up
-better on spontaneous speech than the benchmarks suggest.
-
-Install `nemo_toolkit[asr]` (see `requirements.txt`) only if you want this path;
-it is a large dependency and the paprika pipeline does not need it.

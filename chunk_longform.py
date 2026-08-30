@@ -33,7 +33,8 @@ RATE = 16000
 
 def find_cut_points(pcm: np.ndarray, sr: int = RATE, target: float = 55.0,
                     min_len: float = 25.0, max_len: float = 70.0,
-                    frame_ms: int = 50) -> list[tuple[int, int]]:
+                    frame_ms: int = 50, pause_weight: float = 0.0
+                    ) -> list[tuple[int, int]]:
     """Segment boundaries placed in a genuine PAUSE near `target`.
 
     max_len may exceed 30 s ONLY because each block is decoded with Whisper's
@@ -85,24 +86,76 @@ def find_cut_points(pcm: np.ndarray, sr: int = RATE, target: float = 55.0,
             # 0.35 weights length regularity against silence. Raising it drifts
             # back toward fixed-interval cutting; lowering it lets a block run
             # to max_len chasing a marginally quieter frame.
-            best = int(np.argmin(quiet + 0.35 * dist))
+            if pause_weight > 0:
+                # Score contiguous QUIET RUNS rather than single frames, on
+                # the theory that a long pause marks a sentence boundary while
+                # a short one is a breath.
+                #
+                # MEASURED 2026-08-30 AND REFUTED. At pause_weight 0.6 the
+                # spurious-capital rate at seams went UP, 12% -> 21% over 76
+                # seams on three recordings, and reading the 317 changed spans
+                # showed real losses: words collapsed or truncated
+                # mid-token, e.g. a five-syllable word losing its ending. Two likely reasons: the longest pause near target
+                # is usually a speaker hesitating MID-sentence, which is the
+                # worst place to cut; and cutting at a pause centre starts each
+                # block with ~0.5 s of silence, which is what makes this model
+                # hallucinate (a spurious `cha` duly appeared). Default 0 = off.
+                thr = floor + 0.20 * span
+                quiet_fr = w <= thr
+                runs, i = [], 0
+                while i < len(quiet_fr):
+                    if quiet_fr[i]:
+                        j = i
+                        while j < len(quiet_fr) and quiet_fr[j]:
+                            j += 1
+                        runs.append((i, j))
+                        i = j
+                    else:
+                        i += 1
+                if runs:
+                    longest = max(j - i for i, j in runs)
+                    best_run = min(
+                        runs,
+                        key=lambda r: (0.35 * abs((r[0] + r[1]) / 2 - f_tgt) / max(1, len(w))
+                                       - pause_weight * (r[1] - r[0]) / longest))
+                    best = (best_run[0] + best_run[1]) // 2
+                else:
+                    best = int(np.argmin(quiet + 0.35 * dist))
+            else:
+                best = int(np.argmin(quiet + 0.35 * dist))
             cut = (f_lo + best) * win
         segs.append((start, cut))
         start = cut
     return segs
 
 
-def speech_regions(pcm: np.ndarray, sr: int = RATE, rms_thr: float = 1e-4,
+def speech_regions(pcm: np.ndarray, sr: int = RATE, rms_thr: float | None = None,
                    frame_ms: int = 100, pad: float = 0.3,
-                   min_gap: float = 1.5) -> list[tuple[int, int]]:
+                   min_gap: float = 1.5, level_frac: float = 0.0,
+                   max_cut: float = 0.4) -> list[tuple[int, int]]:
     """Sample ranges that actually contain sound, gaps >= min_gap removed.
 
-    Whisper narrates silence. One press-conference recording opens with 6.2 minutes of
-    DIGITAL silence (rms exactly 0.0) and the offline transcript opens with
-    "vyriausybe prarytu ar jusu skelbt visok jusu jusu jus galvoju" — confident
-    Lithuanian describing nothing. Decoding silence cannot produce a right
-    answer, so the cheapest correct move is to not decode it. An RMS gate costs
-    microseconds and removes the failure mode instead of filtering it later.
+    Whisper narrates silence. One recording opens with 6.2 minutes of DIGITAL
+    silence (rms exactly 0.0) and the offline transcript opens with a fluent,
+    confident Lithuanian sentence describing nothing at all. Decoding silence
+    cannot produce a right answer, so the cheapest correct move is to not
+    decode it. An RMS gate costs microseconds and removes the failure mode
+    instead of filtering it later.
+
+    `level_frac` > 0 derives the threshold from the recording (that fraction of
+    its 75th-percentile frame) instead of using the 1e-4 constant. It defaults
+    to 0 — OFF — and should stay off on conversational audio.
+
+    The constant is genuinely near-useless: measured 2026-08-30 it sits 5-8x
+    BELOW the noise floor of an ordinary room, so it never fires and a 35-min
+    conversational recording returns ONE region. But raising it does not work either.
+    On that recording room tone runs p5=0.00055 / p10=0.00081, while real
+    quiet words measure 0.00053-0.00081 —
+    speech and silence OVERLAP in energy, so no threshold separates them. At
+    level_frac=0.02 the gate deleted 18 spans of real speech, among them the
+    a required pronoun mid-clause and a pair of spoken digits. Separating these needs spectral features, i.e. a real VAD
+    (MarbleNet or Silero), not an RMS comparison. Until then the downstream
+    confidence filter in transcribe_kmynas.py handles what silence produces.
 
     Regions are padded by `pad` so a consonant onset just under threshold is
     not clipped, and gaps shorter than min_gap are kept as real speech pauses.
@@ -113,6 +166,11 @@ def speech_regions(pcm: np.ndarray, sr: int = RATE, rms_thr: float = 1e-4,
         return [(0, len(pcm))]
     rms = np.sqrt((pcm[:n_fr * win].reshape(n_fr, win).astype(np.float32) ** 2)
                   .mean(axis=1) + 1e-12)
+    if rms_thr is None:
+        rms_thr = 1e-4 if level_frac <= 0 else max(
+            1e-4, level_frac * float(np.percentile(rms, 75)))
+        if (rms > rms_thr).mean() < 1.0 - max_cut:
+            rms_thr = 1e-4          # would cut too much; distrust the estimate
     voiced = rms > rms_thr
     if not voiced.any():
         return []
