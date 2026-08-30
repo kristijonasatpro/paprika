@@ -27,12 +27,11 @@ faster than the step interval". At STEP=1.0 s it is not (0.88 s decode leaves
 no headroom once punctuation and feature extraction are counted); at 1.25 s it
 is, with margin.
 
-SILENCE IS GATED BEFORE DECODE, not after. Pointed at the 6.2-minute silent
-lead-in of a press-conference recording, the model emits confident garbage — that is
-where "vyriausybe prarytu ar jusu skelbt visok jusu jusu jus galvoju" in the
-offline transcript comes from. An RMS gate costs microseconds and removes the
-entire failure mode, and it also saves the decode, so it is strictly better
-than filtering hallucinations afterwards.
+SILENCE IS GATED BEFORE DECODE, not after. Pointed at a six-minute silent
+lead-in, the model emits a confident, fluent Lithuanian sentence describing
+nothing at all. An RMS gate costs microseconds and removes the entire failure
+mode, and it also saves the decode, so it is strictly better than filtering
+hallucinations afterwards.
 """
 from __future__ import annotations
 

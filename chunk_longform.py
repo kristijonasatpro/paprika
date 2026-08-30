@@ -135,12 +135,12 @@ def speech_regions(pcm: np.ndarray, sr: int = RATE, rms_thr: float | None = None
                    max_cut: float = 0.4) -> list[tuple[int, int]]:
     """Sample ranges that actually contain sound, gaps >= min_gap removed.
 
-    Whisper narrates silence. One press-conference recording opens with 6.2 minutes of
-    DIGITAL silence (rms exactly 0.0) and the offline transcript opens with
-    "vyriausybe prarytu ar jusu skelbt visok jusu jusu jus galvoju" — confident
-    Lithuanian describing nothing. Decoding silence cannot produce a right
-    answer, so the cheapest correct move is to not decode it. An RMS gate costs
-    microseconds and removes the failure mode instead of filtering it later.
+    Whisper narrates silence. One recording opens with 6.2 minutes of DIGITAL
+    silence (rms exactly 0.0) and the offline transcript opens with a fluent,
+    confident Lithuanian sentence describing nothing at all. Decoding silence
+    cannot produce a right answer, so the cheapest correct move is to not
+    decode it. An RMS gate costs microseconds and removes the failure mode
+    instead of filtering it later.
 
     `level_frac` > 0 derives the threshold from the recording (that fraction of
     its 75th-percentile frame) instead of using the 1e-4 constant. It defaults
