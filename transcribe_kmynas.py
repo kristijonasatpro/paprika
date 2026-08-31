@@ -35,7 +35,7 @@ from transcribe_file import (build_turns, diarize, load_audio,  # noqa: E402
                              write_outputs)
 
 RATE = 16000
-MODEL = os.environ.get("KMYNAS_MODEL", str(HERE / "kmynas-parakeet-lt-v1.nemo"))
+MODEL = os.environ.get("KMYNAS_MODEL", str(HERE / "kmynas-parakeet-lt-v3.nemo"))
 
 
 def pick_device():
@@ -160,6 +160,39 @@ def drop_hallucinations(words: list[dict], min_conf: float
         else:
             keep.append(w)
     return keep, dropped
+
+
+def split_glued_quotes(words: list[dict]) -> tuple[list[dict], int]:
+    """Separate an opening quote the model glued to its neighbour.
+
+    A documented quirk of this checkpoint: it writes `zodis„kitas` with no space,
+    and sometimes carries a whole quoted phrase inside one timestamped word
+    (`as „Registration“`). Everything downstream treats a word as atomic — the
+    seam dedup, the lexicon, speaker attachment and the subtitle wrapper all
+    key on whole words — so the pair stays fused in the transcript and counts
+    as one word. Split before the quote and share the span by character
+    length; the halves are close enough in time that speaker attachment and
+    cue breaks land where they should.
+    """
+    out: list[dict] = []
+    n = 0
+    for w in words:
+        t = w["w"]
+        lead = len(t) - len(t.lstrip("„\"'("))
+        parts = [p for p in re.split(r"\s+|(?=„)", t[lead:]) if p]
+        if len(parts) < 2:
+            out.append(w)
+            continue
+        parts[0] = t[:lead] + parts[0]
+        span = float(w["end"]) - float(w["start"])
+        total = sum(len(p) for p in parts) or 1
+        cur = float(w["start"])
+        for part in parts:
+            step = span * len(part) / total
+            out.append({**w, "w": part, "start": cur, "end": cur + step})
+            cur += step
+        n += len(parts) - 1
+    return out, n
 
 
 def vad_blocks(pcm: np.ndarray, target: float = 120.0, max_len: float = 300.0,
@@ -627,6 +660,10 @@ def main() -> None:
             shown = ", ".join(repr(d["w"]) for d in dropped[:8])
             print(f"  dropped {len(dropped)} low-confidence non-words: {shown}"
                   + (" ..." if len(dropped) > 8 else ""), flush=True)
+
+    words, glued = split_glued_quotes(words)
+    if glued:
+        print(f"  split {glued} words fused to an opening quote", flush=True)
 
     # Decoding is done; drop the acoustic model before diarization. It is
     # ~5 GB in fp32 and nothing below touches it, but it stayed resident on the
