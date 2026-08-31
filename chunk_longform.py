@@ -155,7 +155,7 @@ def speech_regions(pcm: np.ndarray, sr: int = RATE, rms_thr: float | None = None
     level_frac=0.02 the gate deleted 18 spans of real speech, among them the
     a required pronoun mid-clause and a pair of spoken digits. Separating these needs spectral features, i.e. a real VAD
     (MarbleNet or Silero), not an RMS comparison. Until then the downstream
-    confidence filter in transcribe_kmynas.py handles what silence produces.
+    confidence filter in the kmynas repo handles what silence produces.
 
     Regions are padded by `pad` so a consonant onset just under threshold is
     not clipped, and gaps shorter than min_gap are kept as real speech pauses.

@@ -25,3 +25,12 @@ KMYNAS_V2_EVAL.md
 GEMINI_VS_SCRIBE_VS_KMYNAS.md
 CORPUS_NOTES.md
 sudi_post_draft.md
+
+# --- the Parakeet pipeline lives in its own repo now ---------------------
+# github.com/kristijonasatpro/kmynas. These files are kept on disk here
+# because the .nemo checkpoints and .venv-nemo are here, but they are tracked
+# in kmynas, not in paprika. Edit them there.
+transcribe_kmynas.py
+eval_kmynas.py
+lexicon.tsv
+notebooks/colab_kmynas.ipynb

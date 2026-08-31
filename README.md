@@ -1,15 +1,11 @@
 # paprika 🌶️ — Lithuanian speech-to-text
 
-Runs entirely on your own machine. Two pipelines, both
-producing punctuation:
+Runs entirely on your own machine. Two pipelines, both producing punctuation:
 
 - **`subtitle_stream.py`** — live subtitles from a microphone, stable enough to
   put on a screen.
 - **`transcribe_file.py`** — long recordings to a punctuated, speaker-labelled
   transcript plus `.srt` / `.vtt` / `.json`.
-- **`transcribe_kmynas.py`** — the same outputs from a Parakeet-TDT model
-  instead of Whisper. About 10× faster, and it emits punctuation itself; it is
-  documented in its own repo, [kmynas](https://github.com/kristijonasatpro/kmynas).
 
 Nothing leaves the machine. No API key, no upload.
 
@@ -52,43 +48,27 @@ for raw output, `--model` for a different checkpoint.
 Roughly 17× faster than real time on an M4 Mac mini: a 10-minute recording
 takes about a minute, most of it diarization.
 
-## The Parakeet pipeline lives in its own repository now
+## A sibling repo: kmynas
 
-`transcribe_kmynas.py` does the same job with a Parakeet-TDT fine-tune instead
-of Whisper. Its home, with the long-form harness, the loanword lexicon and the
-documentation for both, is **https://github.com/kristijonasatpro/kmynas**.
+The same job with a Parakeet-TDT model instead of Whisper lives at
+**[kristijonasatpro/kmynas](https://github.com/kristijonasatpro/kmynas)** —
+its own pipeline, its own long-form harness, its own documentation. It reuses
+`transcribe_file.py` for everything after decoding, so the two produce
+identically laid-out transcripts.
 
-The script is still here because the two share everything after decoding —
-`transcribe_file.py` supplies the diarization, speaker smoothing, turn assembly
-and the `.txt`/`.srt`/`.vtt`/`.json` writers, so the two produce identically
-laid-out transcripts and cannot drift apart. But the kmynas repo is where it is
-documented and where changes to it should land.
-
-```bash
-python -m venv .venv-nemo          # NeMo conflicts with the Whisper stack
-.venv-nemo/bin/pip install 'nemo_toolkit[asr]' silero-vad soundfile
-.venv-nemo/bin/python transcribe_kmynas.py recording.m4a \
-    --model your-model.nemo --speakers 2 --lexicon lexicon.tsv --review
-```
-
-`--review` writes a second file listing every span the model was unsure about,
-with timestamps — that is where the errors are. The kmynas repo explains it.
-
-### Which one to use
-
-| | paprika (`transcribe_file.py`) | kmynas (`transcribe_kmynas.py`) |
+| | paprika | kmynas |
 |---|---|---|
 | model | Whisper large-v3-turbo fine-tune, ~800M | Parakeet TDT fine-tune, 600M |
 | punctuation | separate ONNX tagger after decoding | from the model itself |
 | word timestamps | cross-attention alignment, ~6.4 GB per block | near-free |
-| speed | RTF ~0.30 | RTF ~0.03 (about 10x faster) |
+| speed | RTF ~0.30 | RTF ~0.03 |
 | clean prepared speech | **better** | weaker |
 | rare proper nouns | **better** | rendered phonetically |
 
-Read both on your own audio; they fail differently and the difference is not
-captured by a single number. Reach for kmynas when you want speed, a smaller
-footprint, and punctuation without a second model; it holds up better on
-spontaneous speech than the benchmarks suggest.
+They fail differently and no single number captures it, so run both on your own
+audio. Reach for kmynas when you want speed, a smaller footprint and
+punctuation without a second model; it holds up better on spontaneous speech
+than the benchmarks suggest.
 
 ## Memory (paprika word timestamps)
 
@@ -174,7 +154,9 @@ untouched), so punctuated tokens map back onto timed words 1:1.
 
 ## Accuracy
 
-WER on Lithuanian benchmarks, long-form decoding:
+WER on Lithuanian benchmarks, long-form decoding. These are the
+`paprika-whisper-lt-*` checkpoints — the kmynas repo has its own numbers for
+its own model, and they are not comparable protocol for protocol.
 
 | | v1 | v2 | v3 |
 |---|---|---|---|
