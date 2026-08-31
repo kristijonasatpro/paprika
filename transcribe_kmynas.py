@@ -380,23 +380,33 @@ def transcribe_words(pcm: np.ndarray, model, device: str, batch_size: int = 1,
     return words
 
 
-def load_lexicon(path: str) -> list[tuple[str, str]]:
-    """(variant_stem, canonical_stem) pairs, longest variant first."""
-    pairs: list[tuple[str, str]] = []
+def load_lexicon(path: str) -> list[tuple[str, str, tuple[str, ...]]]:
+    """(variant_stem, canonical_stem, blocked_prefixes), longest variant first.
+
+    A stem match is blunt: `meil` -> `email` also rewrites `meilės` (love), and
+    that word occurs 610 times in 10M tokens of Lithuanian while the borrowing
+    is confined to business speech. So each row may carry a third
+    tab-separated field listing prefixes that must never be rewritten.
+    """
+    pairs: list[tuple[str, str, tuple[str, ...]]] = []
     for line in open(path, encoding="utf-8"):
-        line = line.split("#", 1)[0].strip()
-        if not line or "\t" not in line:
+        line = line.split("#", 1)[0].rstrip()
+        if not line.strip() or "\t" not in line:
             continue
-        canon, variants = line.split("\t", 1)
+        parts = line.split("\t")
+        canon, variants = parts[0].strip(), parts[1]
+        blocked = tuple(b.strip().lower() for b in parts[2].split(",")
+                        if b.strip()) if len(parts) > 2 else ()
         for v in variants.split(","):
             v = v.strip()
             if v:
-                pairs.append((v, canon.strip()))
+                pairs.append((v, canon, blocked))
     pairs.sort(key=lambda p: -len(p[0]))
     return pairs
 
 
-def normalise_lexicon(words: list[dict], pairs: list[tuple[str, str]]
+def normalise_lexicon(words: list[dict],
+                      pairs: list[tuple[str, str, tuple[str, ...]]]
                       ) -> tuple[list[dict], list[tuple[str, str]]]:
     """Rewrite loanword stems onto one spelling, keeping the Lithuanian ending.
 
@@ -416,8 +426,11 @@ def normalise_lexicon(words: list[dict], pairs: list[tuple[str, str]]
         t = w["w"]
         lead = len(t) - len(t.lstrip("„\"'("))
         core = t[lead:]
-        for variant, canon in pairs:
-            if core.lower().startswith(variant):
+        for variant, canon, blocked in pairs:
+            low = core.lower()
+            if blocked and low.startswith(blocked):
+                continue
+            if low.startswith(variant):
                 rest = core[len(variant):]
                 new = canon + rest
                 if core[:1].isupper():
