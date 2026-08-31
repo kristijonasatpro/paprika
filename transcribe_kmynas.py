@@ -507,6 +507,10 @@ def main() -> None:
     ap.add_argument("--speakers", type=int, default=-1,
                     help="known speaker count; -1 lets the threshold decide")
     ap.add_argument("--threshold", type=float, default=0.55)
+    ap.add_argument("--diar-min-off", type=float, default=0.5,
+                    help="seconds a voice must go quiet before a speaker "
+                         "change is believed. Lower (~0.15) for overlapping "
+                         "conversation, where short turns are otherwise lost")
     ap.add_argument("--batch-size", type=int, default=1)
     ap.add_argument("--no-vad", action="store_true",
                     help="disable VAD block placement and fall back to the "
@@ -613,7 +617,7 @@ def main() -> None:
     if not args.no_diar:
         t0 = time.monotonic()
         segs = diarize(pcm, num_speakers=args.speakers,
-                       threshold=args.threshold)
+                       threshold=args.threshold, min_off=args.diar_min_off)
         n_spk = len({s for _, _, s in segs})
         print(f"diarize: {len(segs)} segments, {n_spk} speakers, "
               f"{time.monotonic()-t0:.0f}s", flush=True)

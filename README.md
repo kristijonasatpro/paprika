@@ -142,9 +142,22 @@ for your own domain.
 | `--min-confidence` | `0.98` | hallucination filter threshold; `0` disables |
 | `--overlap` | `1.3` | block overlap in seconds (non-VAD mode) |
 | `--lexicon` | none | loanword spelling table |
+| `--diar-min-off` | `0.5` | seconds a voice must go quiet before a speaker change is believed; lower for fast turn-taking |
 | `--dtype` | `fp16` | use `fp32` on Apple Silicon if output looks wrong |
 | `--block-secs` | `35` | max block length in non-VAD mode |
 | `--boost-file` | none | domain term list — measured ineffective, see the docstring |
+
+### What it does not fix
+
+Overlapping speech. When two people talk over each other the model hears a
+mixture and emits one shorter, garbled stream — words get collapsed rather than
+split, and no amount of block placement or filtering reaches it, because the
+damage happens inside a block, not at its edges. Diarization degrades in the
+same places for the same reason: while both people are speaking there is no
+silence to detect, so a frame goes to whichever voice dominates it and short
+interjections land on the wrong speaker. `--diar-min-off` helps when turns are
+fast but *not* overlapping; it does nothing for genuine overlap. Handling that
+properly needs source separation or an overlap-trained model.
 
 ### Block length and memory
 

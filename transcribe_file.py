@@ -194,7 +194,8 @@ def fetch_diar_models(quiet: bool = False) -> bool:
 
 # --- diarization ---------------------------------------------------------
 def diarize(pcm: np.ndarray, num_speakers: int = -1,
-            threshold: float = 0.55) -> list[tuple[float, float, int]]:
+            threshold: float = 0.55, min_on: float = 0.3,
+            min_off: float = 0.5) -> list[tuple[float, float, int]]:
     """[(start_s, end_s, speaker_id)] — empty list if models are missing."""
     try:
         import sherpa_onnx
@@ -216,7 +217,13 @@ def diarize(pcm: np.ndarray, num_speakers: int = -1,
         # than a threshold, which has to guess where one voice ends.
         clustering=sherpa_onnx.FastClusteringConfig(
             num_clusters=num_speakers, threshold=threshold),
-        min_duration_on=0.3, min_duration_off=0.5)
+        # min_off is how long a voice must go quiet before a change of
+        # speaker is believed. At 0.5 s a fast exchange — a one-word "Jo,"
+        # dropped on top of the other person — never registers as a turn and
+        # is absorbed into whoever was already speaking. Lower it for
+        # overlapping conversation; raise it for lecture-style audio where
+        # spurious turns are the bigger risk.
+        min_duration_on=min_on, min_duration_off=min_off)
     sd = sherpa_onnx.OfflineSpeakerDiarization(cfg)
     res = sd.process(pcm).sort_by_start_time()
     return [(s.start, s.end, s.speaker) for s in res]
