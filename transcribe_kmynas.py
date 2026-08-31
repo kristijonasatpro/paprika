@@ -15,6 +15,7 @@ because NeMo pins versions that conflict with it.
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 import pathlib
 import re
@@ -613,6 +614,18 @@ def main() -> None:
             shown = ", ".join(repr(d["w"]) for d in dropped[:8])
             print(f"  dropped {len(dropped)} low-confidence non-words: {shown}"
                   + (" ..." if len(dropped) > 8 else ""), flush=True)
+
+    # Decoding is done; drop the acoustic model before diarization. It is
+    # ~5 GB in fp32 and nothing below touches it, but it stayed resident on the
+    # device for the whole diarization pass — which is itself memory-hungry and
+    # runs on CPU — roughly doubling peak footprint on a 16 GB machine for no
+    # reason.
+    del model
+    gc.collect()
+    if dev == "mps":
+        torch.mps.empty_cache()
+    elif dev == "cuda":
+        torch.cuda.empty_cache()
 
     if not args.no_diar:
         t0 = time.monotonic()
