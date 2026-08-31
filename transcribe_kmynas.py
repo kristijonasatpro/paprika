@@ -30,7 +30,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
 from chunk_longform import find_cut_points, speech_regions  # noqa: E402
-from transcribe_file import (build_turns, diarize, load_audio,  # noqa: E402
+from transcribe_file import (_out, build_turns, diarize, load_audio,  # noqa: E402
                              quiet_transformers, smooth_speakers, speaker_at,
                              write_outputs)
 
@@ -443,6 +443,78 @@ def transcribe_words(pcm: np.ndarray, model, device: str, batch_size: int = 1,
     return words
 
 
+def write_review(base: pathlib.Path, words: list[dict], dropped: list[dict],
+                 threshold: float) -> tuple[pathlib.Path, int]:
+    """List the spans the model was least sure about, in time order.
+
+    The confidences are already computed for the hallucination filter, and they
+    are the cheapest way to aim a read. Measured on this model: every error
+    found by reading two transcripts end to end scored below 0.98 — `hcikét`
+    0.875, `sli` 0.866, `Konfort` 0.804 — while the text around them sat at
+    0.99+.
+
+    What it cannot find is a *confident* mistake. The same surname spelled two
+    ways in one recording scored 0.984 and 0.948, so only the second spelling
+    appears here, and a plain wrong word inside fluent speech scored 0.993.
+    This narrows a read; it does not replace one.
+
+    Runs of adjacent uncertain words are one entry, because that is how they
+    occur and how they are read — a garbled phrase is one thing to check, not
+    four. Words the filter removed are listed too, marked `dropped`, so a
+    silent deletion can be audited rather than taken on trust.
+    """
+    import bisect
+
+    rows: list[tuple[float, float, str, str, str, bool]] = []
+
+    # Runs of consecutive words under the threshold collapse into one entry.
+    i, n = 0, len(words)
+    while i < n:
+        c = words[i].get("conf")
+        if c is None or c >= threshold:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n:
+            nxt = words[j + 1].get("conf")
+            if nxt is None or nxt >= threshold:
+                break
+            j += 1
+        span = words[i:j + 1]
+        rows.append((span[0]["start"],
+                     min(w["conf"] for w in span),
+                     " ".join(w["w"] for w in span),
+                     " ".join(w["w"] for w in words[max(0, i - 4):i]),
+                     " ".join(w["w"] for w in words[j + 1:j + 5]),
+                     False))
+        i = j + 1
+
+    starts = [w["start"] for w in words]
+    for w in dropped:
+        k = bisect.bisect_left(starts, w["start"])
+        rows.append((w["start"], w.get("conf") or 0.0, w["w"],
+                     " ".join(x["w"] for x in words[max(0, k - 4):k]),
+                     " ".join(x["w"] for x in words[k:k + 4]),
+                     True))
+
+    rows.sort()
+    out = _out(base, "review.txt")
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(f"# {len(rows)} spans the model was unsure about, out of "
+                f"{len(words)} words. Read these first.\n"
+                f"# Confidence shown is the lowest in the span; threshold "
+                f"{threshold}.\n"
+                f"# `dropped` means the filter already removed it from the "
+                f"transcript.\n"
+                f"# A confident mistake will not appear here — this narrows a "
+                f"read, it does not replace one.\n\n")
+        for start, c, text, lo, hi, was_dropped in rows:
+            tag = " dropped" if was_dropped else ""
+            f.write(f"[{int(start)//60:02d}:{int(start)%60:02d}] {c:.3f}{tag}"
+                    f"  … {lo} [{text}] {hi} …\n")
+    return out, len(rows)
+
+
 def load_lexicon(path: str) -> list[tuple[str, str, tuple[str, ...]]]:
     """(variant_stem, canonical_stem, blocked_prefixes), longest variant first.
 
@@ -595,6 +667,13 @@ def main() -> None:
     ap.add_argument("--vad-target", type=float, default=60.0,
                     help="target block length in seconds. 60 measured best on "
                          "16 GB: 120 is no better and peaks 3.6 GB of swap")
+    ap.add_argument("--review", action="store_true",
+                    help="also write <name>.review.txt: every word the model "
+                         "was unsure about, with a timestamp and context, so a "
+                         "read can start where the errors are")
+    ap.add_argument("--review-below", type=float, default=None,
+                    help="confidence below which a word goes in the review "
+                         "list (default: the --min-confidence threshold)")
     ap.add_argument("--lexicon", default=None,
                     help="TSV of loanword spelling variants to collapse onto "
                          "one form (see lexicon.tsv)")
@@ -703,6 +782,7 @@ def main() -> None:
         raise SystemExit("no speech found")
     print(f"decode: {len(words)} words", flush=True)
 
+    dropped: list[dict] = []
     if scoring:
         words, dropped = drop_hallucinations(words, args.min_confidence)
         if dropped:
@@ -760,6 +840,19 @@ def main() -> None:
     print(f"\n{len(turns)} turns, {len(words)} words, {dur:.0f}s total",
           flush=True)
     print(f"wrote {base}.txt / .srt / .vtt / .json", flush=True)
+
+    if scoring:
+        thr = args.review_below if args.review_below is not None \
+            else args.min_confidence
+        if args.review:
+            path, n = write_review(base, words, dropped, thr)
+            print(f"wrote {path} — {n} spans to check", flush=True)
+        else:
+            n = sum(1 for w in words
+                    if w.get("conf") is not None and w["conf"] < thr)
+            if n:
+                print(f"  {n} words scored below {thr}; --review lists them "
+                      f"with timestamps and context", flush=True)
 
 
 if __name__ == "__main__":

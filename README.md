@@ -68,8 +68,11 @@ documented and where changes to it should land.
 python -m venv .venv-nemo          # NeMo conflicts with the Whisper stack
 .venv-nemo/bin/pip install 'nemo_toolkit[asr]' silero-vad soundfile
 .venv-nemo/bin/python transcribe_kmynas.py recording.m4a \
-    --model your-model.nemo --speakers 2 --lexicon lexicon.tsv
+    --model your-model.nemo --speakers 2 --lexicon lexicon.tsv --review
 ```
+
+`--review` writes a second file listing every span the model was unsure about,
+with timestamps — that is where the errors are. The kmynas repo explains it.
 
 ### Which one to use
 
