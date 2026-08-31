@@ -54,6 +54,36 @@ VOWELS = set("aeiouyąęėįųū")
 FILLER_RE = re.compile(r"^[mhn]{2,}$", re.IGNORECASE)
 
 
+def guard_invalid_ids(model) -> bool:
+    """Drop out-of-vocabulary ids before detokenization.
+
+    In half precision the decoder can leak an id from the blank/duration slots
+    (>= vocab_size) into a hypothesis' token list. It is not logit saturation —
+    the peak is nowhere near the fp16 range — but a backend defect, and it
+    crashes detokenization outright rather than degrading the output. v2 died
+    this way deterministically on one recording. v3 has not reproduced it here
+    across 39 minutes of audio, but the failure is cheap to make impossible: an
+    id the vocabulary cannot express carries no text to lose.
+    """
+    try:
+        dec, vocab = model.decoding, model.tokenizer.vocab_size
+    except AttributeError:
+        return False
+
+    def guarded(orig):
+        def inner(ids, *a, **kw):
+            return orig([i for i in (int(x) for x in ids) if i < vocab], *a, **kw)
+        return inner
+
+    n = 0
+    for name in ("decode_ids_to_tokens", "decode_ids_to_str"):
+        orig = getattr(dec, name, None)
+        if orig is not None:
+            setattr(dec, name, guarded(orig))
+            n += 1
+    return n > 0
+
+
 def enable_confidence(model) -> bool:
     """Turn on per-token confidence. False if this model cannot provide it.
 
@@ -584,8 +614,11 @@ def main() -> None:
                     help="seconds of context spliced onto each block end; 0 "
                          "restores contiguous blocks and their seam artefacts")
     ap.add_argument("--dtype", choices=("fp32", "fp16", "bf16"), default="fp16",
-                    help="fp16 halves GPU memory and decodes faster; fp32 to "
-                         "rule out precision as a cause when output looks wrong")
+                    help="fp16 halves device memory and decodes ~15%% faster. "
+                         "Measured against fp32 on 39 minutes of Lithuanian "
+                         "speech: 0.39%% of words differ and neither is "
+                         "consistently better. v2 checkpoints need fp32 — they "
+                         "crash in fp16")
     ap.add_argument("--no-diar", action="store_true")
     ap.add_argument("--out-dir", default=None)
     ap.add_argument("--quiet", action="store_true")
@@ -601,14 +634,30 @@ def main() -> None:
     print(f"audio: {dur/60:.1f} min   device: {dev} — {where}", flush=True)
 
     t0 = time.monotonic()
+    half = dev != "cpu" and args.dtype != "fp32"
+    # Restore to CPU, cast there, and only then move to the device. Restoring
+    # straight onto the device puts a full fp32 copy of the weights in its
+    # allocator, and that copy sets the high-water mark for the whole run even
+    # though it is dead a moment later — so `--dtype fp16` bought nothing.
+    # Measured on MPS, 7-minute recording, peak device allocation:
+    #
+    #     restore onto device      fp32 6.12 GiB    fp16 6.13 GiB
+    #     restore onto CPU first   fp32 4.06 GiB    fp16 2.22 GiB
+    #
+    # Transcripts are byte-identical either way, word timings included. The
+    # fp32 copy still exists, it just lives in ordinary RAM where it is cheap
+    # and immediately reclaimable.
     model = nemo_asr.models.ASRModel.restore_from(
-        args.model, map_location=torch.device(dev))
-    model = model.to(dev).eval()
-    if dev != "cpu" and args.dtype != "fp32":
+        args.model, map_location=torch.device("cpu"))
+    model = model.eval()
+    if half:
         # Half precision on CPU is emulated and slower, same as the Whisper
-        # path. On GPU it cuts peak memory by ~1 GB and decodes faster.
+        # path. On GPU it decodes faster.
         model = model.half() if args.dtype == "fp16" \
             else model.to(torch.bfloat16)
+    model = model.to(dev)
+    if half:
+        guard_invalid_ids(model)
     print(f"  model loaded in {time.monotonic()-t0:.0f}s ({args.dtype})",
           flush=True)
 
