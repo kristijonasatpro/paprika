@@ -111,6 +111,7 @@ class SubtitleStream:
             model_dir, language=language, task="transcribe")
         self.model = WhisperForConditionalGeneration.from_pretrained(
             model_dir, dtype=self.dtype).to(self.device).eval()
+        self.model.generation_config.max_length = None
         self.buf = np.zeros(0, dtype=np.float32)
         self.buf_t0 = 0.0
         self.clock = 0.0
